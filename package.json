@@ -1,0 +1,16 @@
+{
+  "name": "streamsimple",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Simple movie/show streaming site proxying the MovieBox/Cinexora API, deployed as a Node web service on Render.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
