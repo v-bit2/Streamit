@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>StreamSimple</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" id="brandHome">StreamSimple</div>
+    <div class="searchbox">
+      <input id="searchInput" type="search" placeholder="Search movies, shows..." />
+    </div>
+  </header>
+
+  <main id="app">
+    <section id="statusBar" class="status hidden"></section>
+
+    <section id="homeView">
+      <h2 class="section-title">Trending</h2>
+      <div id="trendingGrid" class="grid"></div>
+
+      <h2 class="section-title">Browse</h2>
+      <div id="homepageGrid" class="grid"></div>
+    </section>
+
+    <section id="searchView" class="hidden">
+      <h2 class="section-title">Results</h2>
+      <div id="searchGrid" class="grid"></div>
+    </section>
+
+    <section id="detailView" class="hidden">
+      <button id="backBtn" class="back-btn">&larr; Back</button>
+      <div id="detailContent"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
