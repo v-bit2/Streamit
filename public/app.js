@@ -1,8 +1,6 @@
-// NOTE: the exact shape of the upstream JSON responses hasn't been verified
-// live (the sandbox that built this couldn't reach the API to test). This
-// file is defensive about field names — it tries several common possibilities
-// for id/title/poster/items, and logs the raw response to the console so you
-// can see exactly what came back and tighten these up if something's blank.
+// Field names below are confirmed against the real MovieBox/Cinexora API
+// responses (via /api/trending, /api/info, /api/sources on the live
+// deployment) — not guesses anymore.
 
 const els = {
   statusBar: document.getElementById('statusBar'),
@@ -42,29 +40,26 @@ async function api(path) {
   return data;
 }
 
-// --- Defensive field extraction -------------------------------------------
+// --- Field extraction (confirmed shapes) -----------------------------
 
+// trending/homepage/search all return { results: { subjectList: [...] } }
 function extractItems(payload) {
-  const r = payload && payload.results ? payload.results : payload;
-  if (!r) return [];
-  return (
-    r.subjectList ||
-    r.items ||
-    r.list ||
-    r.data ||
-    (Array.isArray(r) ? r : []) ||
-    []
-  );
+  const r = (payload && payload.results) || payload || {};
+  return r.subjectList || r.items || r.list || (Array.isArray(r) ? r : []) || [];
 }
 
 function itemId(item) {
-  return item.id || item.subjectId || item._id || item.detailPath || '';
+  return item.subjectId || item.id || '';
 }
 function itemTitle(item) {
-  return item.title || item.name || item.subjectTitle || 'Untitled';
+  return item.title || item.name || 'Untitled';
 }
+// `cover` (and `stills`) are objects: { url, width, height, ... }
 function itemPoster(item) {
-  return item.cover || item.poster || item.thumbnail || item.image || item.pic || '';
+  const cover = item.cover || item.stills || item.thumbnail;
+  if (!cover) return '';
+  if (typeof cover === 'string') return cover;
+  return cover.url || '';
 }
 function itemDetailPath(item) {
   return item.detailPath || item.detail_path || '';
@@ -83,7 +78,7 @@ function renderGrid(container, items) {
     card.className = 'card';
     const poster = itemPoster(item);
     card.innerHTML = `
-      ${poster ? `<img src="${poster}" loading="lazy" onerror="this.src='/api/imgproxy?url=${encodeURIComponent(poster)}'" />` : '<div style="aspect-ratio:2/3;background:#1a1a22;"></div>'}
+      ${poster ? `<img src="${poster}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='/api/imgproxy?url=${encodeURIComponent(poster)}'" />` : '<div style="aspect-ratio:2/3;background:#1a1a22;"></div>'}
       <div class="title">${itemTitle(item)}</div>
     `;
     card.addEventListener('click', () => openDetail(item));
@@ -138,33 +133,75 @@ async function openDetail(item) {
     return;
   }
 
-  const data = (info && info.results) || info || {};
-  const title = itemTitle({ ...item, ...data });
-  const poster = itemPoster({ ...item, ...data });
-  const description = data.description || data.desc || data.summary || '';
+  const results = (info && info.results) || {};
+  const subject = results.subject || {};
+  const merged = { ...item, ...subject };
+  const title = itemTitle(merged);
+  const poster = itemPoster(merged);
+  const description = subject.description || '';
+  const seasons = (results.resource && results.resource.seasons) || [];
+  // subjectType: 1 = movie, 2 = TV/series (confirmed from live data)
+  const isSeries = subject.subjectType === 2 || seasons.length > 0;
+
+  let seasonEpisodePicker = '';
+  if (isSeries && seasons.length) {
+    const seasonOptions = seasons
+      .map((s) => `<option value="${s.se}">Season ${s.se}</option>`)
+      .join('');
+    seasonEpisodePicker = `
+      <div class="episode-picker">
+        <select id="seasonSelect">${seasonOptions}</select>
+        <select id="episodeSelect"></select>
+      </div>
+    `;
+  }
 
   els.detailContent.innerHTML = `
     <div class="detail-header">
       <div class="detail-poster">
-        ${poster ? `<img src="${poster}" onerror="this.src='/api/imgproxy?url=${encodeURIComponent(poster)}'" />` : ''}
+        ${poster ? `<img src="${poster}" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='/api/imgproxy?url=${encodeURIComponent(poster)}'" />` : ''}
       </div>
       <div class="detail-meta">
         <h1>${title}</h1>
         <p>${description}</p>
+        ${seasonEpisodePicker}
         <button class="play-btn" id="playBtn">▶ Play</button>
       </div>
     </div>
     <div class="player-wrap" id="playerWrap"></div>
   `;
 
-  document.getElementById('playBtn').addEventListener('click', () => loadSources(id, detailPath));
+  if (isSeries && seasons.length) {
+    const seasonSelect = document.getElementById('seasonSelect');
+    const episodeSelect = document.getElementById('episodeSelect');
+
+    function populateEpisodes() {
+      const season = seasons.find((s) => String(s.se) === seasonSelect.value) || seasons[0];
+      const maxEp = season.maxEp || 1;
+      episodeSelect.innerHTML = Array.from({ length: maxEp }, (_, i) => i + 1)
+        .map((ep) => `<option value="${ep}">Episode ${ep}</option>`)
+        .join('');
+    }
+    seasonSelect.addEventListener('change', populateEpisodes);
+    populateEpisodes();
+
+    document.getElementById('playBtn').addEventListener('click', () => {
+      loadSources(id, detailPath, seasonSelect.value, episodeSelect.value);
+    });
+  } else {
+    document.getElementById('playBtn').addEventListener('click', () => {
+      loadSources(id, detailPath, null, null);
+    });
+  }
 }
 
-async function loadSources(id, detailPath) {
+async function loadSources(id, detailPath, season, episode) {
   const wrap = document.getElementById('playerWrap');
   wrap.innerHTML = '<div class="empty">Fetching stream…</div>';
   try {
-    const path = `/api/sources?id=${encodeURIComponent(id)}${detailPath ? `&detailPath=${encodeURIComponent(detailPath)}` : ''}`;
+    let path = `/api/sources?id=${encodeURIComponent(id)}`;
+    if (detailPath) path += `&detailPath=${encodeURIComponent(detailPath)}`;
+    if (season && episode) path += `&season=${season}&episode=${episode}`;
     const sources = await api(path);
     renderPlayer(wrap, sources);
   } catch (e) {
@@ -172,75 +209,61 @@ async function loadSources(id, detailPath) {
   }
 }
 
-function findStreamUrl(obj, depth = 0) {
-  if (!obj || depth > 4) return null;
-  if (typeof obj === 'string') {
-    if (/\.(m3u8|mp4)(\?|$)/i.test(obj)) return obj;
-    return null;
-  }
-  if (Array.isArray(obj)) {
-    for (const v of obj) {
-      const found = findStreamUrl(v, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof obj === 'object') {
-    for (const key of ['url', 'm3u8', 'hls', 'src', 'stream', 'link', 'playUrl']) {
-      if (obj[key] && typeof obj[key] === 'string') {
-        const found = findStreamUrl(obj[key], depth + 1);
-        if (found) return found;
-      }
-    }
-    for (const v of Object.values(obj)) {
-      const found = findStreamUrl(v, depth + 1);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function findEmbedUrl(obj, depth = 0) {
-  if (!obj || depth > 4) return null;
-  if (typeof obj === 'string' && /^https?:\/\//.test(obj) && /embed|player/i.test(obj)) return obj;
-  if (Array.isArray(obj)) {
-    for (const v of obj) {
-      const found = findEmbedUrl(v, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof obj === 'object') {
-    for (const key of ['embed', 'iframe', 'embedUrl']) {
-      if (obj[key]) {
-        const found = findEmbedUrl(obj[key], depth + 1);
-        if (found) return found;
-      }
-    }
-    for (const v of Object.values(obj || {})) {
-      const found = findEmbedUrl(v, depth + 1);
-      if (found) return found;
-    }
-  }
-  return null;
+// `streams` (and `downloads`) is an array of { url, format, resolution, ... }
+// — plain progressive MP4s, already sorted low-to-high resolution in
+// practice but we sort explicitly to be safe, and default to the highest.
+function pickBestStream(sources) {
+  const results = (sources && sources.results) || {};
+  const streams = results.streams || results.downloads || [];
+  if (!streams.length) return null;
+  const sorted = [...streams].sort((a, b) => (b.resolution || 0) - (a.resolution || 0));
+  return sorted;
 }
 
 function renderPlayer(wrap, sources) {
-  const streamUrl = findStreamUrl(sources);
-  const embedUrl = !streamUrl ? findEmbedUrl(sources) : null;
+  const streams = pickBestStream(sources);
 
-  if (streamUrl) {
-    wrap.innerHTML = `<video src="${streamUrl}" controls autoplay playsinline></video>`;
+  if (streams && streams.length) {
+    const sourceTags = streams
+      .map((s) => `<source src="${s.url}" type="video/mp4" label="${s.resolution}p" />`)
+      .join('');
+    const qualityOptions = streams
+      .map((s, i) => `<option value="${i}">${s.resolution}p</option>`)
+      .join('');
+
+    wrap.innerHTML = `
+      <video id="videoPlayer" controls autoplay playsinline src="${streams[0].url}"></video>
+      <div class="quality-row">
+        Quality:
+        <select id="qualitySelect">${qualityOptions}</select>
+      </div>
+    `;
+
+    document.getElementById('qualitySelect').addEventListener('change', (e) => {
+      const video = document.getElementById('videoPlayer');
+      const time = video.currentTime;
+      const wasPlaying = !video.paused;
+      video.src = streams[e.target.value].url;
+      video.currentTime = time;
+      if (wasPlaying) video.play();
+    });
     return;
   }
-  if (embedUrl) {
-    wrap.innerHTML = `<iframe src="${embedUrl}" allowfullscreen></iframe>`;
-    return;
+
+  const results = (sources && sources.results) || {};
+  if (results.captions || results.processedSources) {
+    // Streams existed in processedSources but pickBestStream didn't find
+    // results.streams/downloads for some reason — fall back to those.
+    const processed = results.processedSources || [];
+    if (processed.length) {
+      const sorted = [...processed].sort((a, b) => (b.quality || 0) - (a.quality || 0));
+      wrap.innerHTML = `<video controls autoplay playsinline src="${sorted[0].directUrl || sorted[0].streamUrl}"></video>`;
+      return;
+    }
   }
-  // Couldn't confidently find a playable URL — show the raw response so you
-  // can see the real field name and we can fix findStreamUrl() for it.
+
   wrap.innerHTML = `
-    <div class="empty">Couldn't automatically detect a playable URL. Raw response below — check the console too.</div>
+    <div class="empty">Couldn't find a playable stream for this selection. Raw response below.</div>
     <div class="raw-debug">${escapeHtml(JSON.stringify(sources, null, 2))}</div>
   `;
 }
